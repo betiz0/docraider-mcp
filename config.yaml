@@ -1,0 +1,48 @@
+# Docraider-MCP Configuration
+# Environment variables can be referenced using ${VAR_NAME:-default} syntax
+
+server:
+  host: "${HOST:-localhost}"
+  port: "${PORT:-3000}"
+  maxConnections: "${MAX_CONNECTIONS:-200}"
+
+database:
+  host: "${DOCRAIDER_DB_HOST:-localhost}"
+  port: "${DOCRAIDER_DB_PORT:-5432}"
+  name: "${DOCRAIDER_DB_NAME:-docraider-mcp}"
+  user: "${DOCRAIDER_DB_USER:-docraider-mcp_user}"
+  password: "${DOCRAIDER_DB_PASSWORD}"
+  ssl: "${DOCRAIDER_DB_SSL:-false}"
+  poolMax: "${DOCRAIDER_DB_POOL_MAX:-20}"
+  poolMin: "${DOCRAIDER_DB_POOL_MIN:-5}"
+
+crawler:
+  maxConcurrency: 5
+  timeout: 30000
+  maxRetries: 3
+  userAgent: "Docraider-MCP/1.0"
+  delay:
+    min: 1000
+    max: 3000
+  backoff:
+    initialMs: 1000
+    maxMs: 30000
+    multiplier: 2
+
+extraction:
+  maxChunkLength: 4000
+  chunkSize: 1000
+  chunkOverlap: 200
+
+search:
+  maxResults: 20
+  minScore: 0.1
+  language: "${DOCRAIDER_FTS_LANGUAGE:-simple}"
+
+embedding:
+  endpoint: "${EMBEDDING_ENDPOINT:-http://localhost:11434}"
+  apiKey: "${EMBEDDING_API_KEY:-}"
+  model: "${EMBEDDING_MODEL:-nomic-embed-text}"
+  dimensions: "${EMBEDDING_DIMENSIONS:-1536}"
+  batchSize: "${EMBEDDING_BATCH_SIZE:-16}"
+  timeoutMs: "${EMBEDDING_TIMEOUT_MS:-30000}"

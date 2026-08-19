@@ -1,0 +1,51 @@
+{
+  "name": "docraider-mcp",
+  "version": "1.0.0",
+  "description": "Documentation crawler and extraction MCP server",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@mozilla/readability": "^0.4.4",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.4.5",
+    "js-yaml": "^4.1.0",
+    "jsdom": "^25.0.0",
+    "p-limit": "^4.0.0",
+    "pg": "^8.13.0",
+    "pino": "^9.0.0",
+    "playwright": "^1.59.1",
+    "robots-parser": "^3.0.1",
+    "turndown": "^7.1.0",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.0",
+    "@types/jsdom": "^21.1.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.10.0",
+    "@types/turndown": "^5.0.5",
+    "@vitest/coverage-v8": "^2.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "documentation",
+    "crawler",
+    "extraction"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
