@@ -128,7 +128,7 @@ describe.sequential('Quickstart acceptance scenarios', () => {
     const first = await startBackfill();
     if (first.jobId !== 0) {
       let status = await getBackfillStatus(first.jobId);
-      for (let attempt = 0; status?.status === 'running' && attempt < 100; attempt++) {
+      for (let attempt = 0; (status?.status === 'queued' || status?.status === 'running') && attempt < 100; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 50));
         status = await getBackfillStatus(first.jobId);
       }

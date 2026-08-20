@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+self=$0
+path_cli=$(command -v docraider 2>/dev/null || true)
+if [ -n "$path_cli" ] && ! [ "$path_cli" -ef "$self" ] 2>/dev/null; then
+  exec "$path_cli" "$@"
+fi
+
+case "$self" in
+  */*) script_dir=${self%/*} ;;
+  *) script_dir=. ;;
+esac
+script_dir=$(CDPATH= cd -- "$script_dir" && pwd)
+package_cli="$script_dir/../../../dist/cli/entry.js"
+if ! [ -f "$package_cli" ]; then
+  package_cli="$script_dir/../../../dist/cli.js"
+fi
+if [ -f "$package_cli" ]; then
+  exec "${NODE:-node}" "$package_cli" "$@"
+fi
+
+printf '%s\n' 'docraider setup error: CLI not found on PATH and package-relative dist/cli entrypoint is unavailable. Install/build the docraider-mcp package or add docraider to PATH.' >&2
+exit 127

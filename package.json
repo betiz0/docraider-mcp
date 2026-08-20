@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && rm -rf dist/db/migrations && mkdir -p dist/db && cp -R src/db/migrations dist/db/migrations",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "lint": "eslint src --ext .ts",
@@ -28,6 +28,8 @@
     "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
     "@types/js-yaml": "^4.0.0",
     "@types/jsdom": "^21.1.0",
     "@types/node": "^22.0.0",
@@ -42,10 +44,28 @@
     "mcp",
     "documentation",
     "crawler",
-    "extraction"
+    "extraction",
+    "pi-package"
   ],
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "pi": {
+    "skills": [
+      "skills/docraider-search",
+      "skills/docraider-crawl",
+      "skills/docraider-manage"
+    ]
+  },
+  "files": [
+    "dist",
+    "config.yaml",
+    "README.md",
+    "LICENSE",
+    "skills/"
+  ],
+  "bin": {
+    "docraider": "dist/cli/entry.js"
   }
 }

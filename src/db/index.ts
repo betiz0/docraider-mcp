@@ -12,11 +12,11 @@ const DB_IDLE_TIMEOUT = 30000;
 const DB_MAX_LIFETIME = 60000;
 
 class DatabaseManager {
-  private pool: Pool;
+  private pool: Pool | null = null;
   private isConnected = false;
 
-  constructor() {
-    this.pool = new Pool({
+  private createPool(): Pool {
+    const pool = new Pool({
       host: config.database.host,
       port: config.database.port,
       database: config.database.name,
@@ -29,25 +29,32 @@ class DatabaseManager {
       idleTimeoutMillis: DB_IDLE_TIMEOUT,
     });
 
-    this.pool.on('error', (err) => {
-      console.error('Unexpected error on idle client', err);
-      process.exit(-1);
-    });
+    pool.on('error', (err) => { console.error('Unexpected error on idle client', err); });
+    return pool;
   }
 
   async connect(): Promise<void> {
     if (this.isConnected) return;
-    const client = await this.pool.connect();
-    client.release();
-    this.isConnected = true;
+    this.pool ??= this.createPool();
+    try {
+      const client = await this.pool.connect();
+      client.release();
+      this.isConnected = true;
+    } catch (error) {
+      await this.pool.end().catch(() => undefined);
+      this.pool = null;
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {
-    await this.pool.end();
+    if (this.pool) await this.pool.end();
+    this.pool = null;
     this.isConnected = false;
   }
 
   async getClient(): Promise<PoolClient> {
+    this.pool ??= this.createPool();
     return this.pool.connect();
   }
 
@@ -285,7 +292,7 @@ class DatabaseManager {
     return this.query<{ id: string; content: string }>(
       `SELECT id, content
        FROM document_chunks
-       WHERE embedding_status IN ('pending', 'failed')
+       WHERE embedding_status = 'pending' OR (embedding_status = 'failed' AND embedding_attempts < 3)
        ORDER BY
          CASE embedding_status WHEN 'failed' THEN 0 ELSE 1 END,
          embedding_updated_at ASC NULLS FIRST

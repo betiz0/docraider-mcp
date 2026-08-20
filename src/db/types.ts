@@ -106,7 +106,7 @@ export interface HybridSearchResult {
 
 export interface BackfillJob {
   id: number;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'failed';
   totalChunks: number;
   processedChunks: number;
   failedChunks: number;
@@ -114,6 +114,11 @@ export interface BackfillJob {
   startedAt: Date | null;
   completedAt: Date | null;
   createdAt: Date;
+  workerId: string | null;
+  heartbeatAt: Date | null;
+  leaseExpiresAt: Date | null;
+  attemptCount: number;
+  lastStartError: string | null;
 }
 
 export interface EmbeddingStats {

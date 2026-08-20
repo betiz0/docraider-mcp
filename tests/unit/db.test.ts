@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock pg module before any imports
+const poolEnd = vi.fn().mockResolvedValue(undefined);
+const poolConnect = vi.fn().mockResolvedValue({ release: vi.fn(), query: vi.fn().mockResolvedValue({ rows: [] }) });
 vi.mock('pg', () => ({
   Pool: vi.fn().mockImplementation(() => ({
     on: vi.fn(),
-    end: vi.fn(),
-    connect: vi.fn().mockResolvedValue({ release: vi.fn(), query: vi.fn().mockResolvedValue({ rows: [] }) }),
+    end: poolEnd,
+    connect: poolConnect,
   })),
 }));
 
@@ -14,8 +16,12 @@ describe('DatabaseManager', () => {
     const { DatabaseManager } = await import('../../src/db/index.js');
     const PoolMock = vi.mocked((await import('pg')).Pool);
     
-    new DatabaseManager(); // eslint-disable-line @typescript-eslint/no-unused-vars
-    
+    const manager = new DatabaseManager();
+    // Pool creation is intentionally lazy so configuration errors cannot create
+    // DB resources before an entrypoint has finished resolving configuration.
+    expect(PoolMock).not.toHaveBeenCalled();
+    await manager.connect();
+
     expect(PoolMock).toHaveBeenCalledWith(
       expect.objectContaining({
         host: expect.any(String),
@@ -26,5 +32,13 @@ describe('DatabaseManager', () => {
         min: expect.any(Number),
       })
     );
+  });
+
+  it('closes and clears an owned pool when initial connection fails', async () => {
+    const { DatabaseManager } = await import('../../src/db/index.js');
+    poolConnect.mockRejectedValueOnce(new Error('connect failed'));
+    const manager = new DatabaseManager();
+    await expect(manager.connect()).rejects.toThrow('connect failed');
+    expect(poolEnd).toHaveBeenCalled();
   });
 });

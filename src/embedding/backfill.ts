@@ -1,197 +1,102 @@
-/**
- * Async embedding backfill service
- * Processes pending/failed chunks in batches, tracks progress in backfill_jobs table
- * Ensures idempotency: only one running job at a time, re-runnable
- */
-
+/** Durable embedding backfill queue. Processing is owned by a detached worker. */
+import { spawn, type SpawnOptions } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { db } from '../db/index.js';
-import { generateAndUpsertEmbeddings } from './generate.js';
 import { config } from '../config.js';
+import { PgBackfillRepository } from './backfill-repository.js';
 
-const BACKFILL_BATCH_SIZE = 32; // Process 32 chunks per batch
+export interface SpawnedWorker {
+  unref(): void;
+  once?(event: 'error', listener: (error: Error) => void): unknown;
+}
+export type WorkerSpawner = (command: string, args: string[], options: SpawnOptions) => SpawnedWorker;
 
-let currentJobId: number | null = null;
-let isRunning = false;
-
-/**
- * Start a new backfill job
- * Creates a job record and begins processing pending/failed chunks
- * @returns Job info with jobId, estimatedTotal, and status
- */
-export async function startBackfill(): Promise<{
-  jobId: number;
-  estimatedTotal: number;
-  status: string;
+export async function startBackfill(spawner: WorkerSpawner = spawn): Promise<{
+  jobId: number; estimatedTotal: number; status: string;
 }> {
-  // Check if there's already a running job
-  const runningJob = await db.getRunningBackfillJob();
-  if (runningJob) {
-    return {
-      jobId: runningJob.id,
-      estimatedTotal: runningJob.totalChunks,
-      status: runningJob.status,
-    };
-  }
-
-  // Count chunks that need embedding
   const stats = await db.getEmbeddingStats();
   const totalToProcess = stats.pendingCount + stats.failedCount;
-
-  if (totalToProcess === 0) {
-    return { jobId: 0, estimatedTotal: 0, status: 'no work' };
+  const repository = new PgBackfillRepository();
+  const latest = await repository.latest();
+  const active = latest && (latest.status === 'queued' ||
+    (latest.status === 'running' && !!latest.leaseExpiresAt && latest.leaseExpiresAt.getTime() > Date.now()));
+  if (active) {
+    if (latest.status === 'queued') await launchWorker(latest.id, repository, spawner);
+    return { jobId: latest.id, estimatedTotal: latest.totalChunks, status: latest.status };
   }
+  if (totalToProcess === 0) return { jobId: 0, estimatedTotal: 0, status: 'no work' };
 
-  // Create a new backfill job
-  const jobId = await db.createBackfillJob(totalToProcess);
-  await db.startBackfillJob(jobId);
-  currentJobId = jobId;
-  isRunning = true;
-
-  // Process in background (non-blocking)
-  processBackfill(jobId).catch((error) => {
-    console.error(`[Backfill] Job ${jobId} failed:`, error);
-  });
-
-  return { jobId, estimatedTotal: totalToProcess, status: 'running' };
+  const job = await repository.createOrGetActive(totalToProcess);
+  await launchWorker(job.id, repository, spawner);
+  return { jobId: job.id, estimatedTotal: job.totalChunks, status: job.status };
 }
 
-/**
- * Get the status of a backfill job
- */
+async function launchWorker(jobId: number, repository: PgBackfillRepository, spawner: WorkerSpawner): Promise<void> {
+  const adjacentWorkerPath = fileURLToPath(new URL('./backfill-worker.js', import.meta.url));
+  const distWorkerPath = fileURLToPath(new URL('../../dist/embedding/backfill-worker.js', import.meta.url));
+  const sourceWorkerPath = fileURLToPath(new URL('./backfill-worker.ts', import.meta.url));
+  const workerPath = existsSync(adjacentWorkerPath) ? adjacentWorkerPath
+    : existsSync(distWorkerPath) ? distWorkerPath : sourceWorkerPath;
+  const workerArgs = workerPath.endsWith('.ts')
+    ? [fileURLToPath(new URL('../../node_modules/tsx/dist/cli.mjs', import.meta.url)), workerPath]
+    : [workerPath];
+  try {
+    const child = spawner(process.execPath, workerArgs, {
+      detached: true, stdio: 'ignore', env: process.env,
+    });
+    // spawn() reports many launch failures asynchronously (for example ENOENT).
+    // Persist them without changing the accepted/queued response contract.
+    child.once?.('error', (error) => {
+      void Promise.resolve(repository.recordStartError(jobId, error.message)).catch(() => undefined);
+    });
+    child.unref();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await repository.recordStartError(jobId, message);
+  }
+}
+
 export async function getBackfillStatus(jobId: number): Promise<{
-  jobId: number;
-  status: string;
-  totalChunks: number;
-  processedChunks: number;
-  failedChunks: number;
-  errorMessage: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
+  jobId: number; status: string; totalChunks: number; processedChunks: number;
+  failedChunks: number; errorMessage: string | null; startedAt: string | null;
+  completedAt: string | null; workerId: string | null; heartbeatAt: string | null;
+  leaseExpiresAt: string | null; attemptCount: number; lastStartError: string | null;
 } | null> {
-  const job = await db.getBackfillJob(jobId);
+  const job = await new PgBackfillRepository().get(jobId);
   if (!job) return null;
-
-  return {
-    jobId: job.id,
-    status: job.status,
-    totalChunks: job.totalChunks,
-    processedChunks: job.processedChunks,
-    failedChunks: job.failedChunks,
-    errorMessage: job.errorMessage,
-    startedAt: job.startedAt?.toISOString() ?? null,
-    completedAt: job.completedAt?.toISOString() ?? null,
-  };
+  return { jobId: job.id, status: job.status, totalChunks: job.totalChunks,
+    processedChunks: job.processedChunks, failedChunks: job.failedChunks,
+    errorMessage: job.errorMessage, startedAt: job.startedAt?.toISOString() ?? null,
+    completedAt: job.completedAt?.toISOString() ?? null, workerId: job.workerId,
+    heartbeatAt: job.heartbeatAt?.toISOString() ?? null,
+    leaseExpiresAt: job.leaseExpiresAt?.toISOString() ?? null,
+    attemptCount: job.attemptCount, lastStartError: job.lastStartError };
 }
 
-/**
- * Get stats for all embedding-related data
- */
 export async function getEmbeddingStats(): Promise<{
-  totalChunks: number;
-  pendingCount: number;
-  completedCount: number;
-  failedCount: number;
-  currentJob: {
-    jobId: number;
-    status: string;
-    processedChunks: number;
-    totalChunks: number;
-  } | null;
+  totalChunks: number; pendingCount: number; completedCount: number; failedCount: number;
+  currentJob: { jobId: number; status: string; processedChunks: number; totalChunks: number } | null;
 }> {
   const stats = await db.getEmbeddingStats();
-  const runningJob = await db.getRunningBackfillJob();
-
-  return {
-    ...stats,
-    currentJob: runningJob
-      ? {
-          jobId: runningJob.id,
-          status: runningJob.status,
-          processedChunks: runningJob.processedChunks,
-          totalChunks: runningJob.totalChunks,
-        }
-      : null,
-  };
+  const job = await new PgBackfillRepository().latest();
+  const active = job && (job.status === 'queued' || job.status === 'running') ? job : null;
+  return { ...stats, currentJob: active ? { jobId: active.id, status: active.status,
+    processedChunks: active.processedChunks, totalChunks: active.totalChunks } : null };
 }
 
-/**
- * Process backfill batches in a loop
- * Runs synchronously within a single job context
- */
-async function processBackfill(jobId: number): Promise<void> {
-  let processed = 0;
-  let failed = 0;
-
-  try {
-    while (true) {
-      // Fetch a batch of chunks for embedding
-      const chunks = await db.getChunksForEmbedding(BACKFILL_BATCH_SIZE);
-
-      if (chunks.length === 0) {
-        // No more chunks to process
-        break;
-      }
-
-      // Generate embeddings for this batch
-      const results = await generateAndUpsertEmbeddings(chunks.map((c) => ({ chunkId: c.id, content: c.content })));
-
-      // Count successes and failures
-      for (const result of results) {
-        if (result.success) {
-          processed++;
-        } else {
-          failed++;
-        }
-      }
-
-      // Update job progress
-      await db.updateBackfillJobProgress(jobId, processed, failed);
-
-      // Small delay between batches to avoid overwhelming the embedding API
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    // Mark job as completed
-    await db.completeBackfillJob(jobId);
-    console.error(`[Backfill] Job ${jobId} completed: ${processed} processed, ${failed} failed`);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    await db.failBackfillJob(jobId, errorMessage);
-    console.error(`[Backfill] Job ${jobId} failed: ${errorMessage}`);
-  } finally {
-    isRunning = false;
-    currentJobId = null;
-  }
-}
-
-/**
- * Enqueue embedding generation for new/changed chunks after crawl
- * Called automatically when chunks are saved during crawling
- */
 export async function enqueueEmbeddingsForChunks(chunkIds: string[]): Promise<void> {
   if (chunkIds.length === 0) return;
-
-  // Update embedding_status to 'pending' for the given chunk IDs
   const placeholders = chunkIds.map((_, i) => `$${i + 2}`).join(', ');
-  await db.query(
-    `UPDATE document_chunks
-     SET embedding_status = 'pending',
-         embedding_attempts = 0,
-         embedding_error = NULL,
-         embedding_updated_at = NOW()
-     WHERE id IN (${placeholders})`,
-    [config.embedding.model, ...chunkIds]
-  );
+  await db.query(`UPDATE document_chunks SET embedding_status='pending', embedding_attempts=0,
+    embedding_error=NULL, embedding_updated_at=NOW() WHERE id IN (${placeholders})`,
+    [config.embedding.model, ...chunkIds]);
 }
 
-/**
- * Generate embeddings for specific chunks (used by backfill and direct calls)
- */
 export async function embedChunks(chunkIds: string[]): Promise<void> {
   if (chunkIds.length === 0) return;
-
   const chunks = await db.getChunksForEmbedding(chunkIds.length);
   if (chunks.length === 0) return;
-
+  const { generateAndUpsertEmbeddings } = await import('./generate.js');
   await generateAndUpsertEmbeddings(chunks.map((c) => ({ chunkId: c.id, content: c.content })));
 }
