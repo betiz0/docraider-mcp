@@ -145,3 +145,13 @@ vite.config.ts.timestamp-*
 # developing info
 prompts/
 .claude/
+
+# Personal / sensitive files (defense in depth)
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+service-account*.json
+.secrets/
+*.secret
